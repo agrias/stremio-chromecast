@@ -1,0 +1,20 @@
+[project]
+name = "stremio-cast"
+version = "0.1.0"
+description = "Local API: find a show via Stremio addons and cast it to a Chromecast"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.165.0",
+    "httpx>=0.28.1",
+    "pychromecast>=14.1.1",
+    "python-dotenv>=1.2.4",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+stremio-cast = "stremio_cast.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,21 @@
+services:
+  stremio-cast:
+    build: .
+    container_name: stremio-cast
+    restart: unless-stopped
+    env_file: .env   # set PUBLIC_URL there: the TV fetches subtitles / remuxed audio from it
+    ports:
+      - "8766:8766"
+    # On a plain Linux host you can use host networking instead of `ports` (then PUBLIC_URL can be
+    # left unset and is auto-detected, and /devices/discover can find Chromecasts via mDNS):
+    # network_mode: host
+    volumes:
+      - cache:/cache   # extracted/downloaded subtitles, playback state, recent searches
+    logging:           # Docker keeps logs forever by default; cap at 3 x 5 MB
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  cache:
