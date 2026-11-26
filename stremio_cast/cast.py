@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import threading
+import time
 from urllib.parse import unquote, urlparse
 
 import pychromecast
+
+log = logging.getLogger(__name__)
 
 CONTENT_TYPES = {
     ".mkv": "video/x-matroska",
@@ -98,12 +102,61 @@ class Caster:
         if tracks and active_track is not None:
             self.set_track(active_track)
 
-    def set_track(self, track_id: int | None):
-        mc = self.device().media_controller
-        if track_id is None:
-            mc.disable_subtitle()
+    def _request(self, msg: dict, timeout: float = 5.0) -> dict | None:
+        """Send a media-namespace message and wait for the receiver's reply."""
+        done, out = threading.Event(), {}
+
+        def cb(ok: bool, data: dict | None):
+            out["data"] = data if ok else None
+            done.set()
+
+        self.device().media_controller.send_message(msg, callback_function=cb)
+        done.wait(timeout)
+        return out.get("data")
+
+    def _edit_tracks(self, ids: list[int]) -> list[int] | None:
+        """Set the active text tracks; returns the receiver's activeTrackIds, or None if it refused.
+
+        Asks the receiver for its live media session ID first: pychromecast's cached one goes stale after
+        a reload, and the receiver rejects edits with INVALID_MEDIA_SESSION_ID.
+        """
+        st = (self._request({"type": "GET_STATUS"}) or {}).get("status") or []
+        if not st or st[0].get("playerState") not in ("PLAYING", "PAUSED", "BUFFERING"):
+            return None
+        reply = self._request({"type": "EDIT_TRACKS_INFO", "mediaSessionId": st[0]["mediaSessionId"],
+                               "activeTrackIds": ids}) or {}
+        if reply.get("type") != "MEDIA_STATUS":
+            log.debug("%s: EDIT_TRACKS_INFO %s -> %s", self.name, ids, reply)
+            return None
+        return (reply.get("status") or [{}])[0].get("activeTrackIds", [])
+
+    def _ensure_track(self, track_id: int | None, gen: int, timeout: float = 30.0):
+        """Switch the subtitle track, retrying until the receiver confirms it.
+
+        The receiver rejects edits while it is still loading, which takes a few seconds for streams this
+        server remuxes. It also turns on the first text track matching the TV's language by itself, so
+        the request must be repeated after it starts playing.
+        """
+        want = [] if track_id is None else [track_id]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and self._track_gen == gen:
+            try:
+                active = self._edit_tracks(want)
+                if active is not None and (track_id is None or track_id in active):
+                    return
+            except Exception as e:  # noqa: BLE001 - best effort, keep retrying
+                log.debug("%s: edit tracks: %s", self.name, e)
+            time.sleep(1)
+        if self._track_gen == gen:
+            log.warning("%s: subtitle track %s was not activated", self.name, track_id)
+
+    def set_track(self, track_id: int | None, wait: bool = False):
+        """Switch subtitles (None = off). Instant for tracks declared at load."""
+        self._track_gen = gen = getattr(self, "_track_gen", 0) + 1
+        if wait:
+            self._ensure_track(track_id, gen, timeout=5)
         else:
-            mc.enable_subtitle(track_id)
+            threading.Thread(target=self._ensure_track, args=(track_id, gen), daemon=True).start()
 
     def pause(self):
         self.device().media_controller.pause()

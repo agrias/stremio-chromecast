@@ -31,6 +31,7 @@ remuxed audio from it. Without Docker: install `ffmpeg` and [uv](https://docs.as
 | `PUBLIC_URL` | URL the TV uses to reach this server (`http://<server LAN IP>:8766`). Auto-detected on a plain Linux host or with `network_mode: host`; set it explicitly under Docker bridge networking, WSL or Docker Desktop |
 | `PORT`, `HOST` | Listen address (default `0.0.0.0:8766`) |
 | `CAST_CONTENT_TYPE` | Override the MIME type sent to the TV (try `video/mp4` if MKVs won't start) |
+| `CAST_AUDIO_CODECS` | Audio codecs played as-is (default `aac,mp3,opus,vorbis,flac`); others are converted to AAC. Add `ac3,eac3` if your TV/soundbar does Dolby passthrough |
 | `SUB_CONNECTIONS` | Parallel connections for embedded-subtitle extraction. Keep at `1` (see below) |
 | `OPENSUBTITLES_ADDON_URL` | Subtitle addon (default `https://opensubtitles-v3.strem.io`) |
 
@@ -48,6 +49,9 @@ Give the TVs and the server fixed IPs (DHCP reservations) so the config stays va
 The Chromecast's Default Media Receiver ignores audio and subtitle tracks embedded in an MKV, so:
 
 - **Default audio:** cast directly from the debrid CDN, with native seeking. The server does nothing during playback.
+- **Dolby/DTS audio** (E-AC-3, AC-3, DTS, TrueHD): the Chromecast plays these silently unless the TV
+  accepts passthrough, so the server converts just the audio to stereo AAC (video is copied) and streams it.
+  Costs a few % of a core. Seeking restarts the stream.
 - **Other audio:** the server remuxes (stream copy, no re-encode) video plus the chosen track to fragmented MP4
   and streams it to the TV. Seeking restarts the stream at the new position.
 - **Subtitles (OpenSubtitles, default):** fetched in ~1 s, ranked by release-name similarity to your file,
@@ -71,6 +75,7 @@ Measured with a 1080p, 1.8 GB MKV:
 |---|---|---|
 | Idle / direct play | ~70 MB | ~0% |
 | Alternate-audio remux | +85–200 MB (ffmpeg) | ~10–20% of one core |
+| Dolby → AAC audio conversion | +85–200 MB (ffmpeg) | ~15–30% of one core |
 | Embedded-subtitle extraction | +85–200 MB (ffmpeg) | ~10% of a core at 15 MB/s; scales with throughput |
 
 Nothing is re-encoded, so a Raspberry Pi 4/5 or any small box with 1 GB RAM is plenty.

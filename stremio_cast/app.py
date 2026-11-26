@@ -21,7 +21,7 @@ load_dotenv()
 
 from .cast import Caster, Devices, discover  # noqa: E402
 from .media import (  # noqa: E402
-    CACHE, LANG2, Session, Sessions, Track, external_sub_path, fetch_external, remux_stream, save_session,
+    CACHE, LANG2, Session, Sessions, Track, audio_needs_transcode, external_sub_path, fetch_external, remux_stream, save_session,
     shifted_vtt,
 )
 from .stremio import Query, StremioClient, parse_query  # noqa: E402
@@ -170,7 +170,9 @@ def cast_session(
     default_audio = sess.default_audio.index if sess.default_audio else None
     if audio is None or not any(a.index == audio for a in sess.audio):
         audio = default_audio
-    remux = audio is not None and audio != default_audio
+    track = next((a for a in sess.audio if a.index == audio), None)
+    transcode = audio_needs_transcode(track)
+    remux = audio is not None and (audio != default_audio or transcode)
 
     tracks, active = None, None
     if sub:
@@ -180,6 +182,8 @@ def cast_session(
 
     if remux:
         url = f"{PUBLIC_URL}/media/{sess.id}/stream.mp4?audio={audio}&start={start:.3f}"
+        if transcode:
+            url += "&aac=1"
         ctype, cast_start = "video/mp4", None
     else:
         url, ctype, cast_start = sess.url, CONTENT_TYPE, start
@@ -190,13 +194,13 @@ def cast_session(
     except LookupError as e:
         raise HTTPException(503, str(e))
     state = {"session": sess.id, "audio": audio, "sub": sub, "sub_delay": sub_delay, "sync_base": sub_delay,
-             "remux": remux,
+             "remux": remux, "transcode": transcode,
              "offset": start if remux else 0.0, "title": sess.title, "poster": poster}
     with _np_lock:
         now_playing[caster.name] = state
         _save_now_playing()
-    log.info("casting %s to %s (audio=%s sub=%s delay=%+.2f remux=%s start=%.0f)",
-             sess.title, caster.name, audio, sub, sub_delay, remux, start)
+    log.info("casting %s to %s (audio=%s%s sub=%s delay=%+.2f remux=%s start=%.0f)",
+             sess.title, caster.name, audio, " ->aac" if transcode else "", sub, sub_delay, remux, start)
     return state
 
 
@@ -586,14 +590,14 @@ def api_sub_delay(req: DelayRequest):
 
 
 @app.api_route("/media/{sid}/stream.mp4", methods=["GET", "HEAD"])
-async def media_stream(sid: str, request: Request, audio: int, start: float = 0.0):
+async def media_stream(sid: str, request: Request, audio: int, start: float = 0.0, aac: bool = False):
     sess = sessions.get(sid)
     if not sess:
         raise HTTPException(404)
     headers = {"Accept-Ranges": "none", "Cache-Control": "no-store"}
     if request.method == "HEAD":
         return Response(media_type="video/mp4", headers=headers)
-    return StreamingResponse(remux_stream(sess.url, audio, start), media_type="video/mp4", headers=headers)
+    return StreamingResponse(remux_stream(sess.url, audio, start, aac), media_type="video/mp4", headers=headers)
 
 
 @app.get("/media/{sid}/sub/{key}.vtt")

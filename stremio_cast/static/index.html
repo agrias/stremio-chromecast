@@ -385,8 +385,11 @@ async function watchSubs() {
       watchSubs();
     }, 1500);
   }
-  const needsRemux = $("#pAudio") && +$("#pAudio").value !== s.default_audio;
-  if (needsRemux) el.innerHTML += `<div>Non-default audio: streamed through this server; seeking restarts the stream.</div>`;
+  const aSel = $("#pAudio") && +$("#pAudio").value;
+  if ($("#pAudio") && (s.transcode_audio || []).includes(aSel))
+    el.innerHTML += `<div>This audio format isn't supported by Chromecast: converted to AAC by this server; seeking restarts the stream.</div>`;
+  else if ($("#pAudio") && aSel !== s.default_audio)
+    el.innerHTML += `<div>Non-default audio: streamed through this server; seeking restarts the stream.</div>`;
 }
 
 async function castNow() {

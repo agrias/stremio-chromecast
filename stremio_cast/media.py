@@ -2,7 +2,8 @@
 
 The Chromecast Default Media Receiver doesn't expose MKV-embedded audio/subtitle tracks, so:
   * subtitles are extracted (one ffmpeg pass for all text tracks) and side-loaded as WebVTT
-  * a non-default audio track is selected by remuxing (no re-encode) to fragmented MP4 on the fly
+  * a non-default audio track is selected by remuxing (no video re-encode) to fragmented MP4 on the fly;
+    audio the Chromecast can't decode (e.g. E-AC-3) is converted to AAC in the same pass
 """
 
 from __future__ import annotations
@@ -109,6 +110,7 @@ class Session:
             "audio": [a.to_dict() for a in self.audio],
             "subtitles": [s.to_dict() for s in self.subs],
             "default_audio": self.default_audio.index if self.default_audio else None,
+            "transcode_audio": [a.index for a in self.audio if audio_needs_transcode(a)],
             "sub_status": self.sub_status, "sub_progress": round(self.sub_progress, 3),
             "sub_error": self.sub_error,
             "external": [{k: v for k, v in e.items() if k != "url"} for e in self.external],
@@ -398,13 +400,27 @@ class Sessions:
         return sess._sub_done.wait(timeout)
 
 
-async def remux_stream(url: str, audio_index: int, start: float = 0.0):
-    """Async generator yielding fragmented MP4 with video + one chosen audio track (stream copy)."""
+# Audio codecs the Default Media Receiver decodes itself. Dolby (ac3/eac3), DTS and TrueHD only work when
+# the TV/soundbar accepts passthrough; otherwise the Chromecast plays them silently.
+CAST_AUDIO_CODECS = {c.strip() for c in os.environ.get(
+    "CAST_AUDIO_CODECS", "aac,mp3,opus,vorbis,flac").split(",") if c.strip()}
+
+
+def audio_needs_transcode(track: Track | None) -> bool:
+    return track is not None and track.codec not in CAST_AUDIO_CODECS
+
+
+async def remux_stream(url: str, audio_index: int, start: float = 0.0, transcode: bool = False):
+    """Async generator yielding fragmented MP4 with video + one chosen audio track.
+
+    Video is always stream-copied. Audio is copied too, unless `transcode`, in which case it's converted to
+    stereo AAC (cheap: a few % of one core)."""
     args = [FFMPEG, "-v", "error", "-nostdin"]
     if start > 0:
         args += ["-ss", f"{start:.3f}"]
     args += [
         "-i", url, "-map", "0:v:0", "-map", f"0:{audio_index}", "-c", "copy",
+        *(["-c:a", "aac", "-ac", "2", "-b:a", "192k"] if transcode else []),
         "-sn", "-dn", "-map_chapters", "-1",
         "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1",
     ]
